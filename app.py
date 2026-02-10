@@ -224,6 +224,22 @@ st.markdown("""
         padding: 0 6px !important;
     }
     
+    /* RESPONSIVE: 2 columnas en móvil (hasta 768px) */
+    @media (max-width: 768px) {
+        /* Forzar que cada columna ocupe 50% en mobile */
+        div[data-testid="column"] {
+            width: 50% !important;
+            min-width: 50% !important;
+            max-width: 50% !important;
+            flex: 0 0 50% !important;
+        }
+        
+        /* Ocultar la tercera columna en cada fila (mantener solo 2) */
+        div[data-testid="column"]:nth-child(3n) {
+            display: none !important;
+        }
+    }
+    
     </style>
 """, unsafe_allow_html=True)
 
@@ -236,7 +252,7 @@ SHEET_CONSUMPTION = "Consumo de material" # O "Consumos" si prefieres
 # (Eliminado: Usamos Odoo)
 
 # --- 5. CONEXIÓN A GOOGLE SHEETS ---
-# @st.cache_resource
+@st.cache_resource
 def get_google_sheet():
     """Conecta a Google Sheets y devuelve el objeto Workbook"""
     try:
@@ -292,7 +308,7 @@ def get_odoo_products():
             db, uid, api_key,
             'product.product', 'read',
             [product_ids],
-            {'fields': ['id', 'display_name', 'uom_id', 'image_512', 'type']}  # image_512 para mejor calidad
+            {'fields': ['id', 'display_name', 'uom_id', 'image_512', 'type', 'categ_id']}  # image_512 para mejor calidad + categ_id
         )
         
         # Formatear datos para el catálogo
@@ -305,11 +321,17 @@ def get_odoo_products():
             else:
                 img_src = "https://via.placeholder.com/300/CCCCCC/FFFFFF?text=Sin+Imagen"
             
+            # Procesar categoría: Odoo devuelve [ID, "Nombre"] o False
+            category_name = "Sin Categoría"
+            if p.get('categ_id') and isinstance(p['categ_id'], list) and len(p['categ_id']) > 1:
+                category_name = p['categ_id'][1]  # Segundo elemento es el nombre
+            
             catalog.append({
                 'id': str(p['id']),
                 'name': p['display_name'],
                 'unit': p['uom_id'][1] if p.get('uom_id') else 'Unidad',
-                'img': img_src
+                'img': img_src,
+                'category': category_name
             })
         
         st.success(f"✅ {len(catalog)} productos cargados correctamente")
@@ -321,8 +343,8 @@ def get_odoo_products():
         st.code(traceback.format_exc())
         # Fallback a catálogo mock si falla Odoo
         return [
-            {"id": "mat_01", "name": "Cable THHN #12", "unit": "Metros", "img": "https://placehold.co/200x200/3b82f6/white?text=Cable+12"},
-            {"id": "mat_02", "name": "Breaker 20A 1P", "unit": "Unidad", "img": "https://placehold.co/200x200/1e40af/white?text=Breaker"}
+            {"id": "mat_01", "name": "Cable THHN #12", "unit": "Metros", "img": "https://placehold.co/200x200/3b82f6/white?text=Cable+12", "category": "Cables"},
+            {"id": "mat_02", "name": "Breaker 20A 1P", "unit": "Unidad", "img": "https://placehold.co/200x200/1e40af/white?text=Breaker", "category": "Protección"}
         ]
 
 # --- 7. FUNCIONES DE GOOGLE SHEETS ---
@@ -430,6 +452,9 @@ if 'items_per_page' not in st.session_state:
 if 'letter_filter' not in st.session_state:
     st.session_state.letter_filter = "Todas"
 
+if 'category_filter' not in st.session_state:
+    st.session_state.category_filter = "Todas"
+
 # --- 7. FUNCIONES DE UTILIDAD ---
 def reset_app():
     """Reinicia toda la aplicación al estado inicial"""
@@ -437,13 +462,22 @@ def reset_app():
     st.session_state.selected_project = None
     st.session_state.search_query = ""
     st.session_state.technician_name = ""
-    for item in st.session_state.catalog:
-        st.session_state.cart[item['id']] = 0
-    st.rerun()
+    st.session_state.letter_filter = "Todas"
+    st.session_state.category_filter = "Todas"
+    st.session_state.current_page = 1
+    
+    # Reiniciar carrito
+    if 'catalog' in st.session_state:
+        for item in st.session_state.catalog:
+            st.session_state.cart[item['id']] = 0
 
-def filter_catalog(query, letter_filter="Todas"):
-    """Filtra el catálogo según búsqueda de texto y letra inicial"""
+def filter_catalog(query, letter_filter="Todas", category_filter="Todas"):
+    """Filtra el catálogo según búsqueda de texto, letra inicial y categoría"""
     catalog = st.session_state.catalog
+    
+    # Aplicar filtro por categoría
+    if category_filter != "Todas":
+        catalog = [item for item in catalog if item.get('category') == category_filter]
     
     # Aplicar filtro por letra
     if letter_filter != "Todas":
@@ -534,15 +568,16 @@ elif st.session_state.current_step == 2:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Fila: Buscador de texto + Filtro A-Z
-    col_search, col_letter = st.columns([2, 1])
+    # Barra de Herramientas: Búsqueda + Letra + Categoría
+    col_search, col_letter, col_category = st.columns([2, 1, 1.5])
     
     with col_search:
         search_query = st.text_input(
-            "🔍 Buscar material",
+            "🔍 Buscar",
             value=st.session_state.search_query,
-            placeholder="Escribe para filtrar (ej: cable, breaker...)",
-            key="search_input"
+            placeholder="🔍 Buscar cable, breaker...",
+            key="search_input",
+            label_visibility="collapsed"
         )
         # Si cambió la búsqueda, resetear a página 1
         if search_query != st.session_state.search_query:
@@ -552,20 +587,36 @@ elif st.session_state.current_step == 2:
     with col_letter:
         letter_options = ["Todas"] + [chr(i) for i in range(65, 91)]  # A-Z
         letter_filter = st.selectbox(
-            "🔤 Letra inicial",
+            "🔤 Letra",
             options=letter_options,
-            index=letter_options.index(st.session_state.letter_filter),
             key="letter_select"
         )
         # Si cambió la letra, resetear a página 1
-        if letter_filter != st.session_state.letter_filter:
+        if letter_filter != st.session_state.get('letter_filter', 'Todas'):
             st.session_state.letter_filter = letter_filter
+            st.session_state.current_page = 1
+    
+    with col_category:
+        # Extraer categorías únicas del catálogo
+        unique_categories = sorted(list(set([item.get('category', 'Sin Categoría') for item in st.session_state.catalog])))
+        category_options = ["Todas"] + unique_categories
+        
+        # Usar el valor del widget directamente
+        category_filter = st.selectbox(
+            "📂 Categoría",
+            options=category_options,
+            key="category_select"
+        )
+        
+        # Actualizar session state solo si cambió (para resetear paginación)
+        if category_filter != st.session_state.get('category_filter', 'Todas'):
+            st.session_state.category_filter = category_filter
             st.session_state.current_page = 1
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Filtrar catálogo con búsqueda + letra
-    filtered_items = filter_catalog(st.session_state.search_query, st.session_state.letter_filter)
+    # CRÍTICO: Usar valores ACTUALES de los widgets para reactividad inmediata
+    filtered_items = filter_catalog(st.session_state.search_query, letter_filter, category_filter)
     
     if not filtered_items:
         st.warning("🔍 No se encontraron materiales que coincidan con tu búsqueda.")
@@ -580,36 +631,37 @@ elif st.session_state.current_step == 2:
         # Mostrar info de paginación
         st.caption(f"Mostrando {len(pagination_data['items'])} de {pagination_data['total_items']} productos")
         
-        # Grid de productos (2 columnas)
-        cols = st.columns(2)
+        # GRID DE PRODUCTOS - 3 columnas por fila
+        paginated_items = pagination_data['items']
         
-        for index, item in enumerate(pagination_data['items']):
-            col = cols[index % 2]
+        # Iterar en chunks de 3
+        for i in range(0, len(paginated_items), 3):
+            cols = st.columns(3)
+            chunk = paginated_items[i:i+3]
             
-            with col:
-                # Custom HTML Card con imágenes de alta calidad (512px)
-                # Construir HTML manualmente para evitar problemas con comillas en nombres
-                product_html = f'''
-                    <div class="product-card">
-                        <div class="product-image-container">
-                            <img src="{item['img']}" class="product-image" alt="Producto"/>
-                        </div>
-                        <div class="product-name">{item['name']}</div>
-                        <div class="product-unit">📦 {item['unit']}</div>
-                    </div>
-                '''
-                st.markdown(product_html, unsafe_allow_html=True)
-                
-                # Number input integrado visualmente dentro de la tarjeta
-                qty = st.number_input(
-                    "Cantidad",
-                    min_value=0,
-                    key=f"qty_{item['id']}",
-                    value=st.session_state.cart.get(item['id'], 0),
-                    label_visibility="collapsed"
-                )
-                
-                st.session_state.cart[item['id']] = qty
+            for idx, item in enumerate(chunk):
+                with cols[idx]:
+                    # Contenedor con borde para cada producto (Native App Style)
+                    with st.container(border=True):
+                        # Imagen del producto
+                        st.image(item['img'], use_container_width=True)
+                        
+                        # Nombre del producto (en negrita)
+                        st.markdown(f"**{item['name']}**")
+                        
+                        # Unidad (gris pequeño)
+                        st.caption(f"📦 {item['unit']}")
+                        
+                        # Control de cantidad (compacto al pie)
+                        qty = st.number_input(
+                            "Cantidad",
+                            min_value=0,
+                            key=f"qty_{item['id']}",
+                            value=st.session_state.cart.get(item['id'], 0),
+                            label_visibility="collapsed"
+                        )
+                        
+                        st.session_state.cart[item['id']] = qty
         
         # CONTROLES DE PAGINACIÓN
         if pagination_data['total_pages'] > 1:
@@ -737,5 +789,4 @@ elif st.session_state.current_step == 3:
                 st.markdown("<br>", unsafe_allow_html=True)
                 
                 # Botón de reinicio
-                if st.button("🔄 Nuevo Registro"):
-                    reset_app()
+                st.button("🔄 Nuevo Registro", on_click=reset_app)
