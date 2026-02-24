@@ -7,11 +7,11 @@ from datetime import datetime
 import xmlrpc.client
 
 # --- 1. CONFIGURACIÓN INICIAL ---
+# --- 1. CONFIGURACIÓN INICIAL ---
 st.set_page_config(
-    page_title="Tecniman - Registro",
-    page_icon="⚡",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    page_title="Tecniman Dashboard",
+    page_icon="logo_tecniman.png",
+    layout="wide"
 )
 
 # --- 2. ESTILOS CSS (MOBILE PREMIUM COMPACT) ---
@@ -455,6 +455,10 @@ if 'letter_filter' not in st.session_state:
 if 'category_filter' not in st.session_state:
     st.session_state.category_filter = "Todas"
 
+# Lista de materiales ingresados manualmente (fuera de Odoo)
+if 'manual_items' not in st.session_state:
+    st.session_state.manual_items = []
+
 # --- 7. FUNCIONES DE UTILIDAD ---
 def reset_app():
     """Reinicia toda la aplicación al estado inicial"""
@@ -466,10 +470,11 @@ def reset_app():
     st.session_state.category_filter = "Todas"
     st.session_state.current_page = 1
     
-    # Reiniciar carrito
+    # Reiniciar carrito y materiales manuales
     if 'catalog' in st.session_state:
         for item in st.session_state.catalog:
             st.session_state.cart[item['id']] = 0
+    st.session_state.manual_items = []
 
 def filter_catalog(query, letter_filter="Todas", category_filter="Todas"):
     """Filtra el catálogo según búsqueda de texto, letra inicial y categoría"""
@@ -688,23 +693,86 @@ elif st.session_state.current_step == 2:
                     st.rerun()
     
     # Resumen rápido
-    total_selected = sum([q for q in st.session_state.cart.values() if q > 0])
+    total_from_catalog = sum([q for q in st.session_state.cart.values() if q > 0])
+    total_manual = sum([m['quantity'] for m in st.session_state.manual_items])
+    total_selected = total_from_catalog + total_manual
     if total_selected > 0:
-        st.info(f"✅ **{int(total_selected)} ítems seleccionados**")
-    
+        label_parts = []
+        if total_from_catalog > 0:
+            label_parts.append(f"{int(total_from_catalog)} del catálogo")
+        if total_manual > 0:
+            label_parts.append(f"{len(st.session_state.manual_items)} manuales")
+        st.info(f"✅ **Seleccionados: {', '.join(label_parts)}**")
+
     st.markdown("<br>", unsafe_allow_html=True)
-    
+
+    # -----------------------------------------------
+    # EXPANDER: Agregar Material Manual
+    # -----------------------------------------------
+    st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+            color: white;
+            padding: 14px 18px;
+            border-radius: 16px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            text-align: center;
+            margin-bottom: 8px;
+            box-shadow: 0 4px 14px rgba(245, 158, 11, 0.35);
+            letter-spacing: 0.3px;
+        ">
+            ✏️ ¿No encuentras el material? ¡Agrégalo manualmente!
+        </div>
+    """, unsafe_allow_html=True)
+
+    with st.expander("➕ Agregar Material Manual", expanded=False):
+        with st.form("form_material_manual", clear_on_submit=True):
+            manual_name = st.text_input("📝 Nombre del Material",
+                                        placeholder="Ej: Tornillos Especiales M8")
+            manual_qty = st.number_input("📦 Cantidad", min_value=1, value=1, step=1)
+            submitted = st.form_submit_button("➕ Agregar a la lista", use_container_width=True)
+
+            if submitted:
+                if manual_name.strip():
+                    # Generar ID único para diferenciar manuales
+                    manual_id = f"MANUAL-{len(st.session_state.manual_items) + 1:03d}"
+                    st.session_state.manual_items.append({
+                        'id': manual_id,
+                        'name': manual_name.strip(),
+                        'quantity': manual_qty,
+                        'unit': 'Unidad'
+                    })
+                    st.success(f"✅ **{manual_name.strip()}** (x{manual_qty}) agregado a la lista.")
+                else:
+                    st.error("⚠️ El nombre del material no puede estar vacío.")
+
+        # Mostrar materiales manuales ya agregados en esta sesión
+        if st.session_state.manual_items:
+            st.markdown("**Materiales en la lista:**")
+            for i, m in enumerate(st.session_state.manual_items):
+                col_m, col_del = st.columns([4, 1])
+                with col_m:
+                    st.markdown(f"• **{m['name']}** — {m['quantity']} {m['unit']}")
+                with col_del:
+                    if st.button("🗑️", key=f"del_manual_{i}", help="Eliminar"):
+                        st.session_state.manual_items.pop(i)
+                        st.rerun()
+
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # Botones de navegación
     col1, col2 = st.columns([1, 1])
     with col1:
         if st.button("⬅️ Volver"):
             st.session_state.current_step = 1
             st.rerun()
-    
+
     with col2:
         if st.button("Revisar Pedido ✅", type="primary"):
             selected_items = get_selected_items()
-            if selected_items:
+            if selected_items or st.session_state.manual_items:
                 st.session_state.current_step = 3
                 st.rerun()
             else:
@@ -725,6 +793,7 @@ elif st.session_state.current_step == 3:
     st.markdown("### 📋 Materiales Seleccionados")
     selected_items = get_selected_items()
     
+    # Items del catálogo Odoo
     for item_id, qty in selected_items.items():
         item_data = next((x for x in st.session_state.catalog if x['id'] == item_id), None)
         if item_data:
@@ -735,7 +804,19 @@ elif st.session_state.current_step == 3:
                 f'</div>',
                 unsafe_allow_html=True
             )
-    
+
+    # Items manuales (fuera de BD)
+    if st.session_state.manual_items:
+        st.markdown("**✏️ Materiales Manuales:**")
+        for m in st.session_state.manual_items:
+            st.markdown(
+                f'<div class="summary-item" style="border-left-color: #F59E0B;">'
+                f'<strong>{m["name"]}</strong> <span style="font-size:0.75rem;color:#F59E0B;">● Manual</span><br>'
+                f'<span style="color: #64748b;">Cantidad: <strong style="color: #F59E0B;">{m["quantity"]}</strong> {m["unit"]}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
     st.markdown("---")
     
     # Input de nombre de técnico
@@ -763,7 +844,7 @@ elif st.session_state.current_step == 3:
                 # Guardar nombre
                 st.session_state.technician_name = technician
                 
-                # Preparar items para guardar
+                # Preparar items del catálogo Odoo
                 items_to_save = [
                     {
                         "item_id": i_id,
@@ -773,6 +854,15 @@ elif st.session_state.current_step == 3:
                     }
                     for i_id, qty in selected_items.items()
                 ]
+
+                # Agregar materiales manuales a la lista
+                for m in st.session_state.manual_items:
+                    items_to_save.append({
+                        "item_id": m['id'],
+                        "item_name": f"[MANUAL] {m['name']}",
+                        "quantity": m['quantity'],
+                        "unit": m['unit']
+                    })
                 
                 # Guardar en Google Sheets
                 success = save_consumption(
