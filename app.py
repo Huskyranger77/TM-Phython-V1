@@ -297,7 +297,7 @@ def get_odoo_products():
             db, uid, api_key,
             'product.product', 'search',
             [['|', ('type', '=', 'product'), ('type', '=', 'consu')]],  # Almacenables Y Consumibles
-            {'limit': 200}  # Aumentado a 200
+            {'limit': 1000}  # Límite alto para no truncar productos
         )
         
         if not product_ids:
@@ -322,19 +322,22 @@ def get_odoo_products():
                 img_src = "https://via.placeholder.com/300/CCCCCC/FFFFFF?text=Sin+Imagen"
             
             # Procesar categoría: Odoo devuelve [ID, "Nombre"] o False
+            # Aplicar .strip() para eliminar espacios accidentales (ej. 'Cables ' != 'Cables')
             category_name = "Sin Categoría"
             if p.get('categ_id') and isinstance(p['categ_id'], list) and len(p['categ_id']) > 1:
-                category_name = p['categ_id'][1]  # Segundo elemento es el nombre
+                raw_cat = p['categ_id'][1]
+                # Strip + quitar prefijos de jerarquía tipo "All / Cables" → "Cables"
+                category_name = raw_cat.strip().split(' / ')[-1].strip().title()
             
             catalog.append({
                 'id': str(p['id']),
-                'name': p['display_name'],
-                'unit': p['uom_id'][1] if p.get('uom_id') else 'Unidad',
+                'name': p['display_name'].strip(),
+                'unit': p['uom_id'][1].strip() if p.get('uom_id') else 'Unidad',
                 'img': img_src,
                 'category': category_name
             })
         
-        st.success(f"✅ {len(catalog)} productos cargados correctamente")
+        # (debug eliminado — no mostrar mensajes al usuario final)
         return catalog
         
     except Exception as e:
@@ -477,21 +480,33 @@ def reset_app():
     st.session_state.manual_items = []
 
 def filter_catalog(query, letter_filter="Todas", category_filter="Todas"):
-    """Filtra el catálogo según búsqueda de texto, letra inicial y categoría"""
+    """Filtra el catálogo según búsqueda de texto, letra inicial y categoría.
+    Normaliza espacios y mayúsculas para evitar falsos negativos.
+    """
     catalog = st.session_state.catalog
     
-    # Aplicar filtro por categoría
-    if category_filter != "Todas":
-        catalog = [item for item in catalog if item.get('category') == category_filter]
+    # Aplicar filtro por categoría (comparación sin espacios sobrantes)
+    if category_filter and category_filter != "Todas":
+        cf_norm = category_filter.strip().lower()
+        catalog = [
+            item for item in catalog
+            if item.get('category', '').strip().lower() == cf_norm
+        ]
     
-    # Aplicar filtro por letra
-    if letter_filter != "Todas":
-        catalog = [item for item in catalog if item['name'].upper().startswith(letter_filter)]
+    # Aplicar filtro por letra inicial
+    if letter_filter and letter_filter != "Todas":
+        catalog = [
+            item for item in catalog
+            if item['name'].strip().upper().startswith(letter_filter.upper())
+        ]
     
-    # Aplicar filtro de búsqueda de texto
+    # Aplicar filtro de búsqueda de texto (insensible a mayúsculas y espacios)
     if query:
-        query_lower = query.lower()
-        catalog = [item for item in catalog if query_lower in item['name'].lower()]
+        query_norm = query.strip().lower()
+        catalog = [
+            item for item in catalog
+            if query_norm in item['name'].strip().lower()
+        ]
     
     return catalog
 
