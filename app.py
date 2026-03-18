@@ -140,7 +140,7 @@ def get_proyectos():
         st.error(f"Error cargando proyectos de Google Sheets: {e}")
         return []
 
-def save_consumo(proyecto_id, cliente, materiales_carrito, solicitante):
+def save_consumo(proyecto_str, materiales_carrito, solicitante):
     service = get_google_sheets_service()
     if not service: return False
     
@@ -150,21 +150,35 @@ def save_consumo(proyecto_id, cliente, materiales_carrito, solicitante):
     rows_to_insert = []
     for item in materiales_carrito.values():
         rows_to_insert.append([
-            ahora,                  # A: Marca temporal
-            solicitante,            # B: Solicitante
-            proyecto_id,            # C: ID Proyecto
-            cliente,                # D: Cliente
-            item["nombre"],         # E: Material
-            item["unidad"],         # F: Unidad
-            item["cantidad"]        # G: Cantidad
+            ahora,                  # A: Fecha
+            proyecto_str,           # B: Proyecto
+            item["nombre"],         # C: Material
+            item["cantidad"],       # D: Cantidad
+            item["unidad"],         # E: Unidad
+            solicitante             # F: Usuario
         ])
         
     try:
-        service.values().append(
+        # Calcular el verdadero próximo espacio vacío
+        result = service.values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range="Reporte de material!A:G",
+            range="Reporte de material!A:A"
+        ).execute()
+        
+        values = result.get('values', [])
+        next_row = len(values) + 1
+        # Buscar el primer espacio vacío desde arriba hacia abajo
+        for i, val in enumerate(values):
+            if not val or not str(val[0]).strip():
+                next_row = i + 1
+                break
+                
+        insert_range = f"Reporte de material!A{next_row}"
+        
+        service.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=insert_range,
             valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
             body={"values": rows_to_insert}
         ).execute()
         return True
@@ -219,9 +233,9 @@ if st.session_state.paso_actual == 3:
                     st.error("Por favor, ingresa tu nombre.")
                 else:
                     with st.spinner("Guardando en Google Sheets..."):
+                        proyecto_str = f"{p['id']} - {p['nombre']}"
                         exito = save_consumo(
-                            p['id'], 
-                            p['cliente'], 
+                            proyecto_str, 
                             st.session_state.carrito, 
                             solicitante
                         )
@@ -272,6 +286,78 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
+
+    /* === Tarjetas de material compactas para móvil === */
+    /* Reducir gap entre columnas */
+    [data-testid="stHorizontalBlock"] { gap: 0.3rem !important; }
+    
+    /* Hacer imágenes de producto más compactas */
+    [data-testid="stImage"] { margin-bottom: 0 !important; }
+    [data-testid="stImage"] img { 
+        border-radius: 6px;
+        object-fit: cover;
+    }
+    
+    /* Reducir padding de number_input */
+    [data-testid="stNumberInput"] { margin-top: -8px !important; margin-bottom: 0 !important; }
+    [data-testid="stNumberInput"] input { 
+        padding: 4px 8px !important; 
+        font-size: 14px !important;
+        height: 32px !important;
+    }
+    [data-testid="stNumberInput"] button {
+        height: 32px !important;
+        width: 32px !important;
+    }
+
+    /* Tarjeta de info del material */
+    .mat-card {
+        background: #f8fafc;
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 2px;
+    }
+    .mat-card .mat-name {
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        color: #0f172a;
+    }
+    .mat-card .mat-unit {
+        font-size: 9px;
+        color: #94a3b8;
+        margin-top: 1px;
+    }
+
+    @media (max-width: 500px) {
+        /* Forzar 2 columnas en móvil */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            gap: 0.3rem !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 0 !important;
+            flex: 1 !important;
+        }
+        
+        .mat-card { padding: 4px 6px; }
+        .mat-card .mat-name { font-size: 10px; -webkit-line-clamp: 2; }
+        [data-testid="stNumberInput"] input { 
+            padding: 2px 4px !important;
+            font-size: 13px !important;
+            height: 28px !important;
+        }
+        [data-testid="stNumberInput"] button {
+            height: 28px !important;
+            width: 28px !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -406,27 +492,24 @@ elif st.session_state.paso_actual == 2:
                 st.session_state.pagina_mat += 1
                 st.rerun()
                 
-        # GRID DE PRODUCTOS (3 Columnas)
-        st.markdown("<br>", unsafe_allow_html=True)
-        cols = st.columns(3)
+        # GRID DE PRODUCTOS (2 Columnas con imágenes de 135x135)
+        cols = st.columns(2, gap="small")
         for i, mat in enumerate(materiales_pagina):
-            with cols[i % 3]:
-                # Renderizar Imagen si existe
+            with cols[i % 2]:
+                # Imagen centrada 135x135
                 if mat.get("imagen_b64"):
-                    try:
-                        img_bytes = base64.b64decode(mat["imagen_b64"])
-                        st.image(img_bytes, use_container_width=True)
-                    except Exception:
-                        pass # Ignorar errores si el base64 viene corrupto
-                        
+                    img_html = f'<img src="data:image/png;base64,{mat["imagen_b64"]}" style="width:135px; height:135px; object-fit:cover; border-radius:8px; display:block; margin:0 auto;" />'
+                else:
+                    img_html = '<div style="width:135px; height:135px; background:#e2e8f0; border-radius:8px; margin:0 auto;"></div>'
+                
                 st.markdown(f"""
-                <div style='background:#f8fafc; padding:10px; border-radius:8px; border:1px solid #e2e8f0; display:flex; flex-direction:column; justify-content:space-between; margin-bottom:5px;'>
-                    <div style='font-size:12px; font-weight:bold; line-height:1.2; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;'>{mat['nombre']}</div>
-                    <div style='font-size:10px; color:#64748b; margin-top:4px;'>{mat['unidad']}</div>
+                <div class="mat-card" style="text-align:center; padding:6px;">
+                    {img_html}
+                    <div class="mat-name" style="margin-top:4px; text-align:center;">{mat['nombre']}</div>
+                    <div class="mat-unit">{mat['unidad']}</div>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Input de cantidad numérico
                 qty = st.number_input(
                     "Cant", 
                     min_value=0, 
